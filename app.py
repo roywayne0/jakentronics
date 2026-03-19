@@ -5,12 +5,19 @@ import smtplib
 from email.mime.text import MIMEText
 from urllib.parse import quote
 import requests
+from dotenv import load_dotenv
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
-
+# ---------------- ENVIRONMENT ----------------
+load_dotenv()  # Loads .env file
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "supersecretkey")  # fallback
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# ---------------- APP SETUP ----------------
+app = Flask(__name__)
+app.secret_key = SESSION_SECRET
 
 # ---------------- DATABASE ----------------
 def get_db():
@@ -19,17 +26,21 @@ def get_db():
 def init_db():
     conn = get_db()
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS media(
-                    id INTEGER PRIMARY KEY,
-                    filename TEXT,
-                    type TEXT,
-                    category TEXT
-                )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS users(
-                    id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    password TEXT
-                )''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS media(
+            id INTEGER PRIMARY KEY,
+            filename TEXT,
+            type TEXT,
+            category TEXT
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            password TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -57,21 +68,20 @@ def contact():
     text = f"Name: {name}, Email: {email}, Phone: {phone}, Message: {message}"
 
     # EMAIL
-    sender = os.environ.get("EMAIL_USER")
-    password = os.environ.get("EMAIL_PASS")
-    msg = MIMEText(text)
-    msg['Subject'] = "Client Message"
-    msg['From'] = sender
-    msg['To'] = sender
-    try:
-        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-        server.login(sender, password)
-        server.send_message(msg)
-        server.quit()
-    except:
-        pass
+    if EMAIL_SENDER and EMAIL_PASSWORD:
+        msg = MIMEText(text)
+        msg['Subject'] = "Client Message"
+        msg['From'] = EMAIL_SENDER
+        msg['To'] = EMAIL_SENDER
+        try:
+            server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+            server.quit()
+        except Exception as e:
+            print("Email failed:", e)
 
-    # WHATSAPP FIX
+    # WHATSAPP
     encoded = quote(text)
     return redirect(f"https://wa.me/254757250466?text={encoded}")
 
@@ -83,7 +93,7 @@ def login():
         p = request.form['password']
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT * FROM users WHERE username=? AND password=?", (u,p))
+        c.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p))
         user = c.fetchone()
         conn.close()
         if user:
@@ -99,7 +109,7 @@ def register():
         p = request.form['password']
         conn = get_db()
         c = conn.cursor()
-        c.execute("INSERT INTO users(username,password) VALUES(?,?)",(u,p))
+        c.execute("INSERT INTO users(username,password) VALUES(?,?)", (u, p))
         conn.commit()
         conn.close()
         return redirect('/login')
@@ -127,8 +137,7 @@ def upload():
         file.save(path)
         conn = get_db()
         c = conn.cursor()
-        c.execute("INSERT INTO media(filename,type,category) VALUES(?,?,?)",
-                  (file.filename,"image",category))
+        c.execute("INSERT INTO media(filename,type,category) VALUES(?,?,?)", (file.filename, "image", category))
         conn.commit()
         conn.close()
     return redirect('/dashboard')
@@ -143,17 +152,39 @@ def delete(id):
     if file:
         try:
             os.remove(os.path.join(UPLOAD_FOLDER, file[0]))
-        except:
-            pass
-    c.execute("DELETE FROM media WHERE id=?", (id,))
-    conn.commit()
+        except Exception as e:
+            print("Delete failed:", e)
+        c.execute("DELETE FROM media WHERE id=?", (id,))
+        conn.commit()
     conn.close()
     return redirect('/dashboard')
 
-# ---------------- M-PESA (DARaja Placeholder) ----------------
+# ---------------- M-PESA (DARaja) ----------------
 @app.route('/pay')
 def pay():
-    return "Payment Request Placeholder"
+    MPESA_TOKEN = os.getenv("MPESA_TOKEN")
+    MPESA_PASS = os.getenv("MPESA_PASS")
+    url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+    headers = {"Authorization": f"Bearer {MPESA_TOKEN}"}
+    data = {
+        "BusinessShortCode": "174379",
+        "Password": MPESA_PASS,
+        "Timestamp": "20260101010101",
+        "TransactionType": "CustomerPayBillOnline",
+        "Amount": "1",
+        "PartyA": "254757250466",
+        "PartyB": "174379",
+        "PhoneNumber": "254757250466",
+        "CallBackURL": "https://yourdomain.com/callback",
+        "AccountReference": "Jakentronics",
+        "TransactionDesc": "Payment"
+    }
+    try:
+        requests.post(url, json=data, headers=headers)
+    except Exception as e:
+        print("M-PESA request failed:", e)
+    return "Payment Request Sent"
 
+# ---------------- RUN APP ----------------
 if __name__ == "__main__":
-    app.run()
+    app.run(debug=True)
